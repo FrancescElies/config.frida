@@ -62,12 +62,9 @@ interface Detection {
   time: number;
 }
 
-// UTILITIES
-const Utilities = {
-  /** Find a function by export name. */
-  findFunc(fnName: string): NativePointer | null {
-    return Module.findGlobalExportByName(fnName);
-  },
+// PROBE: Memory inspection, module discovery, bookmarks
+const Probe = {
+  // ---- Memory Operations ----
 
   /** Read memory as different types. */
   readMem(
@@ -217,6 +214,92 @@ const Utilities = {
     return results;
   },
 
+  /** Search all readable memory regions, not just modules. */
+  findStringAll(
+    search: string,
+  ): Array<{ address: NativePointer; region: string }> {
+    const results: Array<{ address: NativePointer; region: string }> = [];
+    const pattern = search
+      .split("")
+      .map((c) => c.charCodeAt(0).toString(16))
+      .join(" ");
+
+    Process.enumerateRanges("r--")
+      .concat(Process.enumerateRanges("rw-"))
+      .forEach((range) => {
+        try {
+          Memory.scan(range.base, range.size, pattern, {
+            onMatch(address) {
+              results.push({
+                address,
+                region: `${range.base}-${range.base.add(range.size)}`,
+              });
+              return "continue" as any;
+            },
+            onComplete() {},
+          });
+        } catch (_) {}
+      });
+
+    return results;
+  },
+
+  /** Find pointers to a given address (useful for vtables, globals). */
+  findReferences(target: NativePointer | string): NativePointer[] {
+    const targetAddr = typeof target === "string" ? ptr(target) : target;
+    const results: NativePointer[] = [];
+    const ptrSize = Process.pointerSize;
+
+    Process.enumerateRanges("r--")
+      .concat(Process.enumerateRanges("rw-"))
+      .forEach((range) => {
+        try {
+          for (let offset = 0; offset < range.size; offset += ptrSize) {
+            const addr = range.base.add(offset);
+            try {
+              const val = ptrSize === 8 ? addr.readU64() : addr.readU32();
+              if (ptr(val.toString()).equals(targetAddr)) {
+                results.push(addr);
+              }
+            } catch (_) {}
+          }
+        } catch (_) {}
+      });
+
+    return results;
+  },
+
+  /** Dump all strings in a memory region (like strings command). */
+  strings(addr: NativePointer | string, size: number, minLen = 4): string[] {
+    const pointer = typeof addr === "string" ? ptr(addr) : addr;
+    const results: string[] = [];
+    let current = "";
+
+    for (let i = 0; i < size; i++) {
+      try {
+        const byte = pointer.add(i).readU8();
+        if (byte >= 0x20 && byte <= 0x7e) {
+          current += String.fromCharCode(byte);
+        } else {
+          if (current.length >= minLen) results.push(current);
+          current = "";
+        }
+      } catch (_) {
+        if (current.length >= minLen) results.push(current);
+        current = "";
+      }
+    }
+
+    return results;
+  },
+
+  // ---- Module/Function Discovery ----
+
+  /** Find a function by export name. */
+  findFunc(fnName: string): NativePointer | null {
+    return Module.findGlobalExportByName(fnName);
+  },
+
   /** Get module information. */
   moduleInfo(name: string): ModuleInfo | null {
     try {
@@ -296,100 +379,56 @@ const Utilities = {
     };
   },
 
-  /** Convenience alias matching the original utility template example. */
-  hook(fnName: string, callbacks: HookCallbacks = {}): NativePointer | null {
-    return Hooking.hook(fnName, callbacks);
+  // ---- Introspection / Bookmarks ----
+
+  /** List exported functions from a module. */
+  exports(moduleName?: string): void {
+    const modules = moduleName
+      ? [Process.getModuleByName(moduleName)]
+      : Process.enumerateModules();
+    modules.forEach((mod) => {
+      log(`\n=== ${mod.name} ===`);
+      mod
+        .enumerateExports()
+        .filter((e) => e.type === "function")
+        .slice(0, 50)
+        .forEach((e) => log(`  ${e.name} @ ${e.address}`));
+    });
   },
 
-  /** Search all readable memory regions, not just modules */
-  findStringAll(
-    search: string,
-  ): Array<{ address: NativePointer; region: string }> {
-    const results: Array<{ address: NativePointer; region: string }> = [];
-    const pattern = search
-      .split("")
-      .map((c) => c.charCodeAt(0).toString(16))
-      .join(" ");
-
-    Process.enumerateRanges("r--")
-      .concat(Process.enumerateRanges("rw-"))
-      .forEach((range) => {
-        try {
-          Memory.scan(range.base, range.size, pattern, {
-            onMatch(address) {
-              results.push({
-                address,
-                region: `${range.base}-${range.base.add(range.size)}`,
-              });
-              return "continue" as any;
-            },
-            onComplete() {},
-          });
-        } catch (_) {}
-      });
-
-    return results;
+  /** List imported functions in a module. */
+  imports(moduleName: string): void {
+    const mod = Process.getModuleByName(moduleName);
+    mod.enumerateImports().forEach((imp) => {
+      log(`  ${imp.name} from ${imp.module} @ ${imp.address}`);
+    });
   },
 
-  /** Find pointers to a given address (useful for vtables, globals) */
-  findReferences(target: NativePointer | string): NativePointer[] {
-    const targetAddr = typeof target === "string" ? ptr(target) : target;
-    const results: NativePointer[] = [];
-    const ptrSize = Process.pointerSize;
-
-    Process.enumerateRanges("r--")
-      .concat(Process.enumerateRanges("rw-"))
-      .forEach((range) => {
-        try {
-          for (let offset = 0; offset < range.size; offset += ptrSize) {
-            const addr = range.base.add(offset);
-            try {
-              const val = ptrSize === 8 ? addr.readU64() : addr.readU32();
-              if (ptr(val.toString()).equals(targetAddr)) {
-                results.push(addr);
-              }
-            } catch (_) {}
-          }
-        } catch (_) {}
-      });
-
-    return results;
+  /** Quick memory bookmark system. */
+  bookmarks: new Map<string, NativePointer>(),
+  mark(name: string, addr: NativePointer | string): void {
+    this.bookmarks.set(name, typeof addr === "string" ? ptr(addr) : addr);
+    log(`[+] Bookmarked ${name} = ${addr}`);
   },
-
-  /** Dump all strings in a memory region (like strings command) */
-  strings(addr: NativePointer | string, size: number, minLen = 4): string[] {
-    const pointer = typeof addr === "string" ? ptr(addr) : addr;
-    const results: string[] = [];
-    let current = "";
-
-    for (let i = 0; i < size; i++) {
-      try {
-        const byte = pointer.add(i).readU8();
-        if (byte >= 0x20 && byte <= 0x7e) {
-          current += String.fromCharCode(byte);
-        } else {
-          if (current.length >= minLen) results.push(current);
-          current = "";
-        }
-      } catch (_) {
-        if (current.length >= minLen) results.push(current);
-        current = "";
-      }
-    }
-
-    return results;
+  go(name: string): NativePointer | undefined {
+    return this.bookmarks.get(name);
   },
 };
 
-// HOOKING
+// HOOKING: Generic hooks, behavior modification, anti-detection
 const Hooking = {
   hooks: new Map<string, InvocationListener>(),
+  listeners: new Map<string, InvocationListener>(),
+  modifications: new Map<string, Modification>(),
+  replacements: new Map<string, NativePointer>(),
   mallocAllocations: new Map<string, { size: number; timestamp: number }>(),
+
+  // ---- Basic Hooking ----
 
   /** Generic hook function. */
   hook(fnName: string, callbacks: HookCallbacks = {}): NativePointer | null {
     try {
-      const addr = Utilities.findFunc(fnName);
+      const addr = Probe.findFunc(fnName);
       if (!addr) return null;
 
       if (this.hooks.has(fnName)) {
@@ -429,6 +468,13 @@ const Hooking = {
       return null;
     }
   },
+
+  /** Hook multiple functions. */
+  hookMultiple(names: string[], callbacks: HookCallbacks = {}): void {
+    names.forEach((name) => this.hook(name, callbacks));
+  },
+
+  // ---- Memory Tracking (malloc/free) ----
 
   /** Hook malloc and expose mallocTracker. */
   hookMalloc(verbose = true): void {
@@ -482,6 +528,8 @@ const Hooking = {
     });
   },
 
+  // ---- I/O & String Operations ----
+
   /** Hook read/write. */
   hookIO(): void {
     this.hook("read", {
@@ -511,10 +559,180 @@ const Hooking = {
     log("[+] String operation hooks installed");
   },
 
-  /** Hook multiple functions. */
-  hookMultiple(names: string[], callbacks: HookCallbacks = {}): void {
-    names.forEach((name) => this.hook(name, callbacks));
+  // ---- Behavior Modification ----
+
+  /** Intercept a function and modify its arguments. */
+  intercept(
+    fnName: string,
+    modifier: (this: InvocationContext, args: InvocationArguments) => void,
+  ): void {
+    const addr = Probe.findFunc(fnName);
+    if (!addr) return;
+
+    const key = `intercept:${fnName}`;
+    if (this.listeners.has(key)) {
+      log(`[!] Already intercepted: ${fnName}`);
+      return;
+    }
+
+    const listener = Interceptor.attach(addr, {
+      onEnter(args) {
+        log(`[INTERCEPT] ${fnName}`);
+        try {
+          modifier.call(this, args);
+        } catch (e: any) {
+          log(`[!] Modifier error: ${e.message}`);
+        }
+      },
+    });
+
+    this.listeners.set(key, listener);
+    log(`[+] Intercepted ${fnName}`);
   },
+
+  /** Force a function to return a specific value. */
+  forceReturn(
+    functionName: string,
+    returnValue: any,
+    returnType: NativeCallbackReturnType = "int",
+  ): void {
+    const addr = Probe.findFunc(functionName);
+    if (!addr) return;
+
+    try {
+      Interceptor.replace(
+        addr,
+        new NativeCallback(
+          function () {
+            log(`[MODIFIED] ${functionName} returning ${returnValue}`);
+            return returnValue;
+          },
+          returnType,
+          [],
+        ),
+      );
+
+      this.replacements.set(functionName, addr);
+      this.modifications.set(functionName, {
+        type: "return",
+        value: returnValue,
+      });
+      log(`[+] ${functionName} will always return ${returnValue}`);
+    } catch (e: any) {
+      log(`[!] Replace error: ${e.message}`);
+    }
+  },
+
+  /** Alias for forceReturn. */
+  mock(
+    fnName: string,
+    returnValue: any,
+    returnType: NativeCallbackReturnType = "int",
+  ): void {
+    this.forceReturn(fnName, returnValue, returnType);
+  },
+
+  /** Skip execution by replacing the function with a fixed int return. */
+  skip(functionName: string, returnValue: any = 0): void {
+    this.forceReturn(functionName, returnValue, "int");
+    this.modifications.set(functionName, { type: "skip", value: returnValue });
+  },
+
+  /** Modify one argument before the original function executes. */
+  modifyArg(
+    functionName: string,
+    argIndex: number,
+    newValue: NativePointerValue,
+  ): void {
+    const addr = Probe.findFunc(functionName);
+    if (!addr) return;
+
+    const key = `arg:${functionName}:${argIndex}`;
+    if (this.listeners.has(key)) {
+      log(
+        `[!] Argument modifier already active: ${functionName}[${argIndex}]`,
+      );
+      return;
+    }
+
+    const listener = Interceptor.attach(addr, {
+      onEnter(args) {
+        log(
+          `[MODIFY] ${functionName} arg[${argIndex}]: ${args[argIndex]} → ${newValue}`,
+        );
+        args[argIndex] = newValue as any;
+      },
+    });
+
+    this.listeners.set(key, listener);
+    this.modifications.set(key, { type: "argument", value: newValue });
+    log(`[+] Will modify arg ${argIndex} of ${functionName}`);
+  },
+
+  /** Log function arguments. */
+  logArgs(fnName: string, argTypes: string[] = []): void {
+    const addr = Probe.findFunc(fnName);
+    if (!addr) return;
+
+    const key = `log:${fnName}`;
+    if (this.listeners.has(key)) {
+      log(`[!] Already logging arguments for: ${fnName}`);
+      return;
+    }
+
+    const listener = Interceptor.attach(addr, {
+      onEnter(args) {
+        log(`[${fnName}]:`);
+        for (let i = 0; i < Math.max(argTypes.length, 4); i++) {
+          const type = argTypes[i] || "unknown";
+          log(`  arg${i} (${type}): ${args[i]}`);
+        }
+      },
+    });
+
+    this.listeners.set(key, listener);
+    log(`[+] Logging ${fnName} arguments`);
+  },
+
+  // ---- Anti-Detection / Stealth ----
+
+  /** Hide Frida's presence from common detection techniques. */
+  antiDetect(): void {
+    const pthreadCreate = Probe.findFunc("pthread_create");
+    if (pthreadCreate) {
+      Interceptor.attach(pthreadCreate, {
+        onLeave(retval) {
+          // Could filter/modify thread names here
+        },
+      });
+    }
+
+    const checks = ["getppid", "strstr", "strcmp", "strlen"];
+    checks.forEach((fn) => {
+      const addr = Probe.findFunc(fn);
+      if (!addr) return;
+      // Monitoring only - actual evasion needs target-specific logic
+    });
+
+    log("[*] Anti-detection hooks applied (monitoring mode)");
+  },
+
+  /** Spoof common Frida detection artifacts. */
+  hideMaps(): void {
+    const fopen = Probe.findFunc("fopen");
+    if (!fopen) return;
+
+    Interceptor.attach(fopen, {
+      onEnter(args) {
+        const path = args[0]?.readCString();
+        if (path?.includes("/proc/") && path?.includes("maps")) {
+          log(`[STEALTH] Intercepted ${path} open`);
+        }
+      },
+    });
+  },
+
+  // ---- Management ----
 
   /** Unhook one function without touching unrelated listeners. */
   unhook(fnName: string): void {
@@ -526,11 +744,11 @@ const Hooking = {
     log(`[+] Unhooked: ${fnName}`);
   },
 
-  /** Unhook all hooks managed by H. */
+  /** Unhook all hooks managed by Hooking. */
   unhookAll(): void {
     this.hooks.forEach((listener) => listener.detach());
     this.hooks.clear();
-    log("[+] H hooks removed");
+    log("[+] All hooks removed");
   },
 
   /** List active hooks. */
@@ -538,18 +756,49 @@ const Hooking = {
     return Array.from(this.hooks.keys());
   },
 
-  /** Compatibility alias; replacement logic is centralized in C. */
-  replaceReturn(
-    fnName: string,
-    returnValue: any,
-    returnType: NativeCallbackReturnType = "int",
-  ): void {
-    Behavior.forceReturn(fnName, returnValue, returnType);
+  /** Revert a replacement or detach listeners associated with a function. */
+  revert(functionName: string): void {
+    const replacement = this.replacements.get(functionName);
+    if (replacement) {
+      Interceptor.revert(replacement);
+      this.replacements.delete(functionName);
+      this.modifications.delete(functionName);
+    }
+
+    Array.from(this.listeners.entries()).forEach(([key, listener]) => {
+      if (key.includes(`:${functionName}`)) {
+        listener.detach();
+        this.listeners.delete(key);
+        this.modifications.delete(key);
+      }
+    });
+
+    log(`[+] Reverted modifications for ${functionName}`);
+  },
+
+  /** Revert all modifications. */
+  revertAll(): void {
+    this.replacements.forEach((address) => Interceptor.revert(address));
+    this.replacements.clear();
+
+    this.listeners.forEach((listener) => listener.detach());
+    this.listeners.clear();
+    this.modifications.clear();
+
+    log("[+] All modifications reverted");
+  },
+
+  /** List active modifications. */
+  listModifications(): void {
+    log("\n=== ACTIVE MODIFICATIONS ===");
+    this.modifications.forEach((mod, fn) => {
+      log(`${fn}: ${JSON.stringify(mod)}`);
+    });
   },
 };
 
-// ANALYSIS
-const Aanalysis = {
+// ANALYSIS: Memory tracking, leak detection, performance profiling
+const Analysis = {
   allocations: new Map<string, AllocationInfo>(),
   frees: new Map<string, number>(),
   memoryStats: {
@@ -576,8 +825,8 @@ const Aanalysis = {
       return;
     }
 
-    const mallocAddr = Utilities.findFunc("malloc");
-    const freeAddr = Utilities.findFunc("free");
+    const mallocAddr = Probe.findFunc("malloc");
+    const freeAddr = Probe.findFunc("free");
 
     if (!mallocAddr || !freeAddr) {
       log("[!] malloc/free not found");
@@ -595,26 +844,26 @@ const Aanalysis = {
         const size = (this as any).size;
         const addr = retval.toString();
 
-        Aanalysis.allocations.set(addr, {
+        Analysis.allocations.set(addr, {
           size,
           timestamp: Date.now(),
           type: "malloc",
         });
-        Aanalysis.memoryStats.totalAllocated += size;
+        Analysis.memoryStats.totalAllocated += size;
       },
     });
 
     const freeListener = Interceptor.attach(freeAddr, {
       onEnter(args) {
         const addr = args[0].toString();
-        const alloc = Aanalysis.allocations.get(addr);
+        const alloc = Analysis.allocations.get(addr);
 
         if (alloc) {
-          Aanalysis.memoryStats.totalFreed += alloc.size;
-          Aanalysis.allocations.delete(addr);
+          Analysis.memoryStats.totalFreed += alloc.size;
+          Analysis.allocations.delete(addr);
         }
 
-        Aanalysis.frees.set(addr, Date.now());
+        Analysis.frees.set(addr, Date.now());
       },
     });
 
@@ -624,12 +873,10 @@ const Aanalysis = {
 
   /** Print the current memory/leak report. */
   memoryReport(): void {
-    const leaks = Array.from(
-      Aanalysis.allocations.values(),
-    ) as AllocationInfo[];
+    const leaks = Array.from(Analysis.allocations.values()) as AllocationInfo[];
     const now = Date.now();
     const suspectedLeaks = leaks.filter(
-      (l) => now - l.timestamp > Aanalysis.suspectAfterMs,
+      (l) => now - l.timestamp > Analysis.suspectAfterMs,
     );
 
     log("\n=== MEMORY LEAK REPORT ===");
@@ -662,7 +909,7 @@ const Aanalysis = {
     }
   },
 
-  /** Stop only the memory listeners owned by A. */
+  /** Stop memory tracking. */
   stopMemoryTracking(): void {
     this.memoryListeners.forEach((listener) => listener.detach());
     this.memoryListeners = [];
@@ -697,6 +944,8 @@ const Aanalysis = {
     }, duration * 1000);
   },
 
+  // ---- Performance Profiling ----
+
   /** Begin profiling a function until explicitly stopped. */
   profile(functionName: string): void {
     if (this.profilerListeners.has(functionName)) {
@@ -704,7 +953,7 @@ const Aanalysis = {
       return;
     }
 
-    const addr = Utilities.findFunc(functionName);
+    const addr = Probe.findFunc(functionName);
     if (!addr) return;
 
     if (!this.performance.has(functionName)) {
@@ -717,7 +966,7 @@ const Aanalysis = {
       },
       onLeave() {
         const duration = Date.now() - (this as any).startTime;
-        const stats = Aanalysis.performance.get(functionName)!;
+        const stats = Analysis.performance.get(functionName)!;
         stats.calls++;
         stats.times.push(duration);
         stats.totalTime += duration;
@@ -735,7 +984,7 @@ const Aanalysis = {
       return;
     }
 
-    const addr = Utilities.findFunc(fnName);
+    const addr = Probe.findFunc(fnName);
     if (!addr) return;
 
     this.performance.set(fnName, { calls: 0, times: [], totalTime: 0 });
@@ -746,15 +995,15 @@ const Aanalysis = {
       },
       onLeave() {
         const duration = Date.now() - (this as any).startTime;
-        const stats = Aanalysis.performance.get(fnName)!;
+        const stats = Analysis.performance.get(fnName)!;
         stats.calls++;
         stats.times.push(duration);
         stats.totalTime += duration;
 
         if (stats.calls >= sampleCount) {
           listener.detach();
-          Aanalysis.profilerListeners.delete(fnName);
-          Aanalysis.reportPerformance(fnName);
+          Analysis.profilerListeners.delete(fnName);
+          Analysis.reportPerformance(fnName);
         }
       },
     });
@@ -763,10 +1012,12 @@ const Aanalysis = {
     log(`[*] Profiling ${fnName}... (collecting ${sampleCount} samples)`);
   },
 
+  /** Profile multiple functions. */
   profileMultiple(functionNames: string[]): void {
     functionNames.forEach((fn) => this.profile(fn));
   },
 
+  /** Stop profiling a specific function or all. */
   stopProfiling(functionName: string | null = null): void {
     if (functionName) {
       const listener = this.profilerListeners.get(functionName);
@@ -779,6 +1030,7 @@ const Aanalysis = {
     this.profilerListeners.clear();
   },
 
+  /** Report performance stats. */
   reportPerformance(functionName: string | null = null): void {
     log("\n=== PERFORMANCE REPORT ===\n");
 
@@ -806,6 +1058,7 @@ const Aanalysis = {
     });
   },
 
+  /** Show the slowest functions by average execution time. */
   slowest(count = 5): void {
     const sorted = Array.from(this.performance.entries()).sort((a, b) => {
       const avgA = a[1].calls ? a[1].totalTime / a[1].calls : 0;
@@ -821,7 +1074,7 @@ const Aanalysis = {
   },
 };
 
-// DEBUGGING
+// DEBUGGING: Tracing, backtraces, thread inspection
 const Debugging = {
   traces: {} as Record<string, TraceEntry[]>,
   traceListeners: new Map<string, InvocationListener>(),
@@ -833,7 +1086,7 @@ const Debugging = {
       return;
     }
 
-    const addr = Utilities.findFunc(fnName);
+    const addr = Probe.findFunc(fnName);
     if (!addr) return;
 
     let count = 0;
@@ -894,11 +1147,12 @@ const Debugging = {
     );
   },
 
-  /** Alias matching the example script's FunctionTracer.trace(). */
+  /** Alias for traceFunction. */
   trace(functionName: string, depth = 5): void {
     this.traceFunction(functionName, 0, depth);
   },
 
+  /** Stop tracing a specific function or all. */
   stopTrace(functionName: string | null = null): void {
     if (functionName) {
       const listener = this.traceListeners.get(functionName);
@@ -911,6 +1165,7 @@ const Debugging = {
     this.traceListeners.clear();
   },
 
+  /** Summarize all traces. */
   traceSummary(): void {
     log("\n=== TRACE SUMMARY ===");
     (Object.entries(Debugging.traces) as Array<[string, TraceEntry[]]>).forEach(
@@ -920,6 +1175,7 @@ const Debugging = {
     );
   },
 
+  /** Clear traces for a specific function or all. */
   clearTraces(functionName: string | null = null): void {
     if (functionName) delete this.traces[functionName];
     else this.traces = {};
@@ -944,183 +1200,7 @@ const Debugging = {
   },
 };
 
-// INTERCEPTION / BEHAVIOR
-const Behavior = {
-  modifications: new Map<string, Modification>(),
-  listeners: new Map<string, InvocationListener>(),
-  replacements: new Map<string, NativePointer>(),
-
-  /** Intercept a function and modify its arguments. */
-  intercept(
-    fnName: string,
-    modifier: (this: InvocationContext, args: InvocationArguments) => void,
-  ): void {
-    const addr = Utilities.findFunc(fnName);
-    if (!addr) return;
-
-    const key = `intercept:${fnName}`;
-    if (this.listeners.has(key)) {
-      log(`[!] Already intercepted: ${fnName}`);
-      return;
-    }
-
-    const listener = Interceptor.attach(addr, {
-      onEnter(args) {
-        log(`[INTERCEPT] ${fnName}`);
-        try {
-          modifier.call(this, args);
-        } catch (e: any) {
-          log(`[!] Modifier error: ${e.message}`);
-        }
-      },
-    });
-
-    this.listeners.set(key, listener);
-    log(`[+] Intercepted ${fnName}`);
-  },
-
-  /** Force a function to return a specific value. */
-  forceReturn(
-    functionName: string,
-    returnValue: any,
-    returnType: NativeCallbackReturnType = "int",
-  ): void {
-    const addr = Utilities.findFunc(functionName);
-    if (!addr) return;
-
-    try {
-      Interceptor.replace(
-        addr,
-        new NativeCallback(
-          function () {
-            log(`[MODIFIED] ${functionName} returning ${returnValue}`);
-            return returnValue;
-          },
-          returnType,
-          [],
-        ),
-      );
-
-      this.replacements.set(functionName, addr);
-      this.modifications.set(functionName, {
-        type: "return",
-        value: returnValue,
-      });
-      log(`[+] ${functionName} will always return ${returnValue}`);
-    } catch (e: any) {
-      log(`[!] Replace error: ${e.message}`);
-    }
-  },
-
-  /** Compatibility name from the utility template. */
-  mock(
-    fnName: string,
-    returnValue: any,
-    returnType: NativeCallbackReturnType = "int",
-  ): void {
-    this.forceReturn(fnName, returnValue, returnType);
-  },
-
-  /** Skip execution by replacing the function with a fixed int return. */
-  skip(functionName: string, returnValue: any = 0): void {
-    this.forceReturn(functionName, returnValue, "int");
-    this.modifications.set(functionName, { type: "skip", value: returnValue });
-  },
-
-  /** Modify one argument before the original function executes. */
-  modifyArg(
-    functionName: string,
-    argIndex: number,
-    newValue: NativePointerValue,
-  ): void {
-    const addr = Utilities.findFunc(functionName);
-    if (!addr) return;
-
-    const key = `arg:${functionName}:${argIndex}`;
-    if (this.listeners.has(key)) {
-      log(`[!] Argument modifier already active: ${functionName}[${argIndex}]`);
-      return;
-    }
-
-    const listener = Interceptor.attach(addr, {
-      onEnter(args) {
-        log(
-          `[MODIFY] ${functionName} arg[${argIndex}]: ${args[argIndex]} → ${newValue}`,
-        );
-        args[argIndex] = newValue as any;
-      },
-    });
-
-    this.listeners.set(key, listener);
-    this.modifications.set(key, { type: "argument", value: newValue });
-    log(`[+] Will modify arg ${argIndex} of ${functionName}`);
-  },
-
-  /** Log function arguments. */
-  logArgs(fnName: string, argTypes: string[] = []): void {
-    const addr = Utilities.findFunc(fnName);
-    if (!addr) return;
-
-    const key = `log:${fnName}`;
-    if (this.listeners.has(key)) {
-      log(`[!] Already logging arguments for: ${fnName}`);
-      return;
-    }
-
-    const listener = Interceptor.attach(addr, {
-      onEnter(args) {
-        log(`[${fnName}]:`);
-        for (let i = 0; i < Math.max(argTypes.length, 4); i++) {
-          const type = argTypes[i] || "unknown";
-          log(`  arg${i} (${type}): ${args[i]}`);
-        }
-      },
-    });
-
-    this.listeners.set(key, listener);
-    log(`[+] Logging ${fnName} arguments`);
-  },
-
-  listModifications(): void {
-    log("\n=== ACTIVE MODIFICATIONS ===");
-    this.modifications.forEach((mod, fn) => {
-      log(`${fn}: ${JSON.stringify(mod)}`);
-    });
-  },
-
-  /** Revert a replacement or detach listeners associated with a function. */
-  revert(functionName: string): void {
-    const replacement = this.replacements.get(functionName);
-    if (replacement) {
-      Interceptor.revert(replacement);
-      this.replacements.delete(functionName);
-      this.modifications.delete(functionName);
-    }
-
-    Array.from(this.listeners.entries()).forEach(([key, listener]) => {
-      if (key.includes(`:${functionName}`)) {
-        listener.detach();
-        this.listeners.delete(key);
-        this.modifications.delete(key);
-      }
-    });
-
-    log(`[+] Reverted C modifications for ${functionName}`);
-  },
-
-  revertAll(): void {
-    this.replacements.forEach((address) => Interceptor.revert(address));
-    this.replacements.clear();
-
-    this.listeners.forEach((listener) => listener.detach());
-    this.listeners.clear();
-    this.modifications.clear();
-
-    log("[+] All C modifications reverted");
-  },
-};
-
-// NETWORK / DATA-MONITORING
+// NETWORK: API call tracking, sensitive data monitoring
 const Network = {
   calls: [] as ApiCall[],
   callCount: 0,
@@ -1156,7 +1236,7 @@ const Network = {
     functionNames.forEach((fnName) => {
       if (this.apiListeners.has(fnName)) return;
 
-      const addr = Utilities.findFunc(fnName);
+      const addr = Probe.findFunc(fnName);
       if (!addr) return;
 
       const listener = Interceptor.attach(addr, {
@@ -1191,6 +1271,7 @@ const Network = {
     log("[+] API hooks installed");
   },
 
+  /** Show recent API calls. */
   recentCalls(count = 10): void {
     log("\n=== RECENT API CALLS ===");
     this.calls.slice(-count).forEach((call) => {
@@ -1200,6 +1281,7 @@ const Network = {
     });
   },
 
+  /** Print API call statistics. */
   apiStats(): void {
     const byFunction: Record<string, number> = {};
     this.calls.forEach((call) => {
@@ -1215,6 +1297,7 @@ const Network = {
       .forEach(([fn, count]) => log(`  ${fn}: ${count}`));
   },
 
+  /** Stop API hooks. */
   stopAPI(): void {
     this.apiListeners.forEach((listener) => listener.detach());
     this.apiListeners.clear();
@@ -1232,7 +1315,7 @@ const Network = {
     targets.forEach((fnName) => {
       if (this.dataListeners.has(fnName)) return;
 
-      const addr = Utilities.findFunc(fnName);
+      const addr = Probe.findFunc(fnName);
       if (!addr) return;
 
       const listener = Interceptor.attach(addr, {
@@ -1270,6 +1353,7 @@ const Network = {
     log("[+] Sensitive-data monitor active");
   },
 
+  /** Report detected sensitive data. */
   sensitiveReport(): void {
     log("\n=== SENSITIVE-DATA REPORT ===");
     log(`Detections: ${this.detectedData.length}`);
@@ -1280,25 +1364,24 @@ const Network = {
     });
   },
 
+  /** Stop sensitive data monitor. */
   stopSensitiveDataMonitor(): void {
     this.dataListeners.forEach((listener) => listener.detach());
     this.dataListeners.clear();
     log("[+] Sensitive-data monitor stopped");
   },
 
+  /** Monitor socket activity. */
   socketActivity(): void {
-    if (
-      Process.platform == "barebone" ||
-      Process.platform == "qnx" ||
-      Process.platform == "freebsd"
-    ) {
-      return;
-    }
     const lib = {
       linux: "libc.so",
       darwin: "libSystem.B.dylib",
       windows: "ws2_32.dll",
-    }[Process.platform];
+    }[Process.platform] ?? null;
+
+    if (!lib) {
+      return;
+    }
 
     Process.getModuleByName(lib)
       .enumerateExports()
@@ -1312,10 +1395,10 @@ const Network = {
       .forEach((ex) => {
         Interceptor.attach(ex.address, {
           onEnter: function (args) {
-            var fd = args[0].toInt32();
-            var socktype = Socket.type(fd);
+            const fd = args[0].toInt32();
+            const socktype = Socket.type(fd);
             if (socktype !== "tcp" && socktype !== "tcp6") return;
-            var address = Socket.peerAddress(fd);
+            const address = Socket.peerAddress(fd);
             if (address === null) return;
             log(`${fd} ${ex.name} ${address}`);
           },
@@ -1324,109 +1407,9 @@ const Network = {
   },
 };
 
-// EXPORT
-const Export = {
-  toJSON(data: any, filename?: string): string {
-    const json = JSON.stringify(
-      data,
-      (_, v) => {
-        if (v instanceof NativePointer) return v.toString();
-        if (v instanceof ArrayBuffer)
-          return `[ArrayBuffer ${v.byteLength} bytes]`;
-        return v;
-      },
-      2,
-    );
-
-    if (filename) {
-      // Would need File API or send() to host
-      send({ type: "file", name: filename, data: json });
-    }
-    return json;
-  },
-
-  sendToHost(type: string, payload: any): void {
-    send({ type, ...payload });
-  },
-};
-
-// Auto-complete friendly introspection
-const Introspection = {
-  exports(moduleName?: string): void {
-    const modules = moduleName
-      ? [Process.getModuleByName(moduleName)]
-      : Process.enumerateModules();
-    modules.forEach((mod) => {
-      log(`\n=== ${mod.name} ===`);
-      mod
-        .enumerateExports()
-        .filter((e) => e.type === "function")
-        .slice(0, 50)
-        .forEach((e) => log(`  ${e.name} @ ${e.address}`));
-    });
-  },
-
-  imports(moduleName: string): void {
-    const mod = Process.getModuleByName(moduleName);
-    mod.enumerateImports().forEach((imp) => {
-      log(`  ${imp.name} from ${imp.module} @ ${imp.address}`);
-    });
-  },
-
-  /** Quick memory bookmark system */
-  bookmarks: new Map<string, NativePointer>(),
-  mark(name: string, addr: NativePointer | string): void {
-    this.bookmarks.set(name, typeof addr === "string" ? ptr(addr) : addr);
-    log(`[+] Bookmarked ${name} = ${addr}`);
-  },
-  go(name: string): NativePointer | undefined {
-    return this.bookmarks.get(name);
-  },
-};
-
-const Stealth = {
-  /** Hide Frida's presence from common detection techniques */
-  antiDetect(): void {
-    // Hide threads created by Frida
-    const pthreadCreate = Utilities.findFunc("pthread_create");
-    if (pthreadCreate) {
-      Interceptor.attach(pthreadCreate, {
-        onLeave(retval) {
-          // Could filter/modify thread names here
-        },
-      });
-    }
-
-    // Patch common detection functions
-    const checks = ["getppid", "strstr", "strcmp", "strlen"];
-    checks.forEach((fn) => {
-      const addr = Utilities.findFunc(fn);
-      if (!addr) return;
-      // Monitoring only - actual evasion needs target-specific logic
-    });
-
-    log("[*] Anti-detection hooks applied (monitoring mode)");
-  },
-
-  /** Spoof common Frida detection artifacts */
-  hideMaps(): void {
-    // On Android, /proc/self/maps reveals frida-gadget/server
-    const fopen = Utilities.findFunc("fopen");
-    if (!fopen) return;
-
-    Interceptor.attach(fopen, {
-      onEnter(args) {
-        const path = args[0]?.readCString();
-        if (path?.includes("/proc/") && path?.includes("maps")) {
-          log(`[STEALTH] Intercepted ${path} open`);
-          // Could redirect to sanitized copy
-        }
-      },
-    });
-  },
-};
-
+// CRYPTO: OpenSSL, CommonCrypto, BCrypt hooks
 const Crypto = {
+  /** Hook common OpenSSL functions. */
   hookOpenSSL(): void {
     const targets = [
       { name: "EVP_DigestInit_ex", args: ["ctx", "type", "impl"] },
@@ -1451,7 +1434,7 @@ const Crypto = {
     ];
 
     targets.forEach(({ name, args }) => {
-      const addr = Utilities.findFunc(name);
+      const addr = Probe.findFunc(name);
       if (!addr) return;
 
       Hooking.hook(name, {
@@ -1459,14 +1442,12 @@ const Crypto = {
         logReturn: false,
         onEnter(args) {
           log(`\n[CRYPTO] ${name}`);
-          // Print args with hexdump for buffer pointers
           for (let i = 0; i < Math.min(args.length, 6); i++) {
             const arg = args[i];
             log(`  arg[${i}]: ${arg}`);
-            // Attempt hexdump for likely buffer args
             if (args[i + 1]?.toInt32() > 0 && args[i + 1].toInt32() < 8192) {
               try {
-                Utilities.hexDump(arg, Math.min(args[i + 1].toInt32(), 64));
+                Probe.hexDump(arg, Math.min(args[i + 1].toInt32(), 64));
               } catch (_) {}
             }
           }
@@ -1478,8 +1459,8 @@ const Crypto = {
     });
   },
 
+  /** Hook macOS/iOS CommonCrypto functions. */
   hookCommonCrypto(): void {
-    // macOS/iOS specific
     [
       "CC_SHA1",
       "CC_SHA256",
@@ -1492,8 +1473,8 @@ const Crypto = {
     });
   },
 
+  /** Hook Windows BCrypt functions. */
   hookBCrypt(): void {
-    // Windows
     [
       "BCryptEncrypt",
       "BCryptDecrypt",
@@ -1513,52 +1494,51 @@ function Help(): void {
 ╚═══════════════════════════════════════════════════════╝
 
 MODULES:
-  [U]tilities      memory, modules, native calls
-  [H]ooking        generic hooks, malloc/free, I/O
-  [A]nalysis       leak tracking, memory analysis, profiling
-  [B]ehaviour      change functions behaviour
-  [D]ebugging      tracing, trace history, threads, symbols
-  [I]nterception   modify args, force returns, mock/skip
-  [N]etwork/Data   API call history, sensitive-data monitoring
-  [E]xport
-  [I]nspect        Interactive repl helpers
-  Stealth
-  Crypto
+  [P]robe        memory, modules, function discovery, bookmarks
+  [H]ooking      hooks, behavior mods, interception, stealth
+  [A]nalysis     memory tracking, leak detection, profiling
+  [D]ebugging    tracing, backtraces, threads, symbols
+  [N]etwork      API tracking, sensitive data monitoring
+  [C]rypto       OpenSSL, CommonCrypto, BCrypt hooks
 
 QUICK EXAMPLES:
-  U.findFunc("strlen")
-  U.hexDump("0x7f...")
-  H.hook("malloc")
-  H.hookMalloc()
-  A.analyzeMemory(8)
-  A.startMemoryTracking()
-  A.memoryReport()
-  A.profileMultiple(["malloc", "free"])
-  A.reportPerformance()
-  D.traceFunction("open", 5)
-  D.traceSummary()
-  C.forceReturn("check_license", 1)
-  C.modifyArg("open", 0, ptr("0x..."))
-  N.hookAPI()
-  N.recentCalls()
-  N.monitorSensitiveData()
-  N.sensitiveReport()
+  Probe.findFunc("strlen")
+  Probe.readMem(addr)
+  Probe.hexDump("0x7f...")
+  
+  Hooking.hook("malloc")
+  Hooking.hookMalloc()
+  Hooking.forceReturn("check_license", 1)
+  Hooking.modifyArg("open", 0, ptr("0x..."))
+  Hooking.antiDetect()
+  
+  Analysis.analyzeMemory(8)
+  Analysis.startMemoryTracking()
+  Analysis.memoryReport()
+  Analysis.profileMultiple(["malloc", "free"])
+  Analysis.reportPerformance()
+  
+  Debugging.traceFunction("open", 5)
+  Debugging.traceSummary()
+  
+  Network.hookAPI()
+  Network.recentCalls()
+  Network.monitorSensitiveData()
+  Network.sensitiveReport()
+  
+  Crypto.hookOpenSSL()
 
 Type help() anytime.
 `);
 }
 
-// INIT
+// EXPORT
 export const Toolkit = {
-  Utilities,
+  Probe,
   Hooking,
-  Aanalysis,
+  Analysis,
   Debugging,
-  Behavior,
   Network,
-  Export,
-  Introspection,
-  Stealth,
   Crypto,
   Help,
 };

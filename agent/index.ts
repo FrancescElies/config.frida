@@ -2,16 +2,12 @@
 import { Toolkit as T } from "./toolkit.js";
 
 Object.assign(globalThis as any, {
-  U: T.Utilities,
-  H: T.Hooking,
-  A: T.Aanalysis,
-  D: T.Debugging,
-  B: T.Behavior,
-  N: T.Network,
-  E: T.Export,
-  I: T.Introspection,
-  S: T.Stealth,
+  A: T.Analysis,
   C: T.Crypto,
+  D: T.Debugging,
+  H: T.Hooking,
+  N: T.Network,
+  P: T.Probe,
   Help: T.Help,
 });
 
