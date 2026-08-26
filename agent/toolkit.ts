@@ -649,9 +649,7 @@ const Hooking = {
 
     const key = `arg:${functionName}:${argIndex}`;
     if (this.listeners.has(key)) {
-      log(
-        `[!] Argument modifier already active: ${functionName}[${argIndex}]`,
-      );
+      log(`[!] Argument modifier already active: ${functionName}[${argIndex}]`);
       return;
     }
 
@@ -1373,11 +1371,16 @@ const Network = {
 
   /** Monitor socket activity. */
   socketActivity(): void {
+    let plat = Process.platform;
+    if (plat == "freebsd" || plat == "barebone" || plat == "qnx") {
+      log("platform not supported");
+      return;
+    }
     const lib = {
       linux: "libc.so",
       darwin: "libSystem.B.dylib",
       windows: "ws2_32.dll",
-    }[Process.platform] ?? null;
+    }[plat];
 
     if (!lib) {
       return;
@@ -1534,11 +1537,11 @@ Type help() anytime.
 
 // EXPORT
 export const Toolkit = {
-  Probe,
-  Hooking,
   Analysis,
-  Debugging,
-  Network,
   Crypto,
+  Debugging,
+  Hooking,
+  Network,
+  Probe,
   Help,
 };
