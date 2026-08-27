@@ -16,3 +16,8 @@ console.log(`
 ║   Frida toolkit loaded – Help() for usage    ║
 ╚══════════════════════════════════════════════╝
 `);
+
+//
+// Custom stuff below
+//
+

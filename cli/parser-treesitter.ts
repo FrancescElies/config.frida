@@ -13,9 +13,7 @@ import * as path from 'path';
 import Parser from 'tree-sitter';
 import C from 'tree-sitter-cpp';
 
-// ============================================================================
 // Type Definitions
-// ============================================================================
 
 /** Represents a type - either a basic type name or a chain of pointers with qualifiers */
 type TypePath = Array<[string, string[]]> | string;
@@ -53,9 +51,7 @@ interface ParsedHeader {
   structs: ParsedStruct[];
 }
 
-// ============================================================================
 // Tree-sitter Node Types
-// ============================================================================
 
 const NODE_TYPES = {
   FunctionDeclaration: 'function_declaration',
@@ -67,9 +63,7 @@ const NODE_TYPES = {
   PrimitiveType: 'primitive_type'
 } as const;
 
-// ============================================================================
 // Main Entry Point
-// ============================================================================
 
 function main(): void {
   if (process.argv.length !== 3) {
@@ -97,9 +91,7 @@ function main(): void {
 
 main();
 
-// ============================================================================
 // Core Parsing Functions
-// ============================================================================
 
 /**
  * Parse a C/C++ header file using tree-sitter.
@@ -185,7 +177,7 @@ function parseStruct(node: Parser.SyntaxNode, sourceCode: string): ParsedStruct 
     for (const child of bodyNode.children) {
       if (child.type === NODE_TYPES.FieldDeclaration) {
         const fieldName = extractDeclaratorName(child, sourceCode);
-        
+
         if (isFunctionPointerField(child, sourceCode)) {
           const returnType = extractType(child, sourceCode);
           const parameters = extractFieldParameters(child, sourceCode);
@@ -204,9 +196,7 @@ function parseStruct(node: Parser.SyntaxNode, sourceCode: string): ParsedStruct 
   return { name: structName, functionPointers };
 }
 
-// ============================================================================
 // Helper Functions
-// ============================================================================
 
 /**
  * Check if a field declaration is a function pointer.
@@ -227,22 +217,22 @@ function isFunctionPointerField(node: Parser.SyntaxNode, sourceCode: string): bo
  */
 function extractType(node: Parser.SyntaxNode, sourceCode: string): TypePath {
   const typeText = sourceCode.substring(node.startIndex, node.endIndex);
-  
+
   // Check for pointer chains
   const pointerMatch = typeText.match(/\*+/g);
   if (pointerMatch) {
     const pointerChain: Array<[string, string[]]> = [];
     const parts = typeText.split(/\*+/);
-    
+
     for (let i = 0; i < parts.length - 1; i++) {
       const part = parts[i].trim();
       const qualifiers = extractQualifiers(part);
       pointerChain.push(['Pointer', qualifiers]);
     }
-    
+
     const baseType = parts[parts.length - 1].trim();
     pointerChain.push([baseType || 'void', extractQualifiers(baseType)]);
-    
+
     return pointerChain;
   }
 
@@ -257,7 +247,7 @@ function extractType(node: Parser.SyntaxNode, sourceCode: string): TypePath {
  */
 function extractQualifiers(typeStr: string): string[] {
   const qualifiers: string[] = [];
-  
+
   if (typeStr.includes('const')) {
     qualifiers.push('const');
   }

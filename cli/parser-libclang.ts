@@ -3,7 +3,7 @@
 /**
  * C/C++ Header Parser using libclang
  * Parse function declarations and struct function pointers
- * 
+ *
  * Installation:
  * npm install libclang
  */
@@ -12,9 +12,7 @@ import * as libclang from 'libclang';
 import * as fs from 'fs';
 import * as path from 'path';
 
-// ============================================================================
 // Type Definitions
-// ============================================================================
 
 /** Represents a type - either a basic type name or a chain of pointers with qualifiers */
 type TypePath = Array<[string, string[]]> | string;
@@ -52,9 +50,7 @@ interface ParsedHeader {
   structs: ParsedStruct[];
 }
 
-// ============================================================================
 // Constants
-// ============================================================================
 
 const BITS_PER_BYTE = 8;
 const BYTES_PER_FIELD_OFFSET = 8;
@@ -69,9 +65,7 @@ const CXCursorKind = {
   ParmDecl: 10
 } as const;
 
-// ============================================================================
 // Main Entry Point
-// ============================================================================
 
 function main(): void {
   if (process.argv.length !== 3) {
@@ -99,9 +93,7 @@ function main(): void {
 
 main();
 
-// ============================================================================
 // Core Parsing Functions
-// ============================================================================
 
 /**
  * Parse a C/C++ header file and extract function declarations and structs with function pointers.
@@ -223,9 +215,7 @@ function parseStruct(cursor: libclang.Cursor): ParsedStruct | null {
   return { name: structName, functionPointers };
 }
 
-// ============================================================================
 // Type Parsing Utilities
-// ============================================================================
 
 /**
  * Determine if a type is a function pointer.
@@ -239,7 +229,7 @@ function isFunctionPointer(type: libclang.Type): boolean {
 
   const pointeeType = type.pointeeType;
   return pointeeType.kind === libclang.TypeKind.FunctionProto ||
-         pointeeType.kind === libclang.TypeKind.FunctionNoProto;
+    pointeeType.kind === libclang.TypeKind.FunctionNoProto;
 }
 
 /**

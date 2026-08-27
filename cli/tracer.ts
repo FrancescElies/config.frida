@@ -1,5 +1,3 @@
-#!/usr/bin/env node
-
 /**
  * Dynamic Function Tracer using Frida
  * Traces function calls based on parsed C/C++ headers
@@ -14,11 +12,7 @@
 import * as frida from "frida";
 import * as fs from "fs";
 import * as path from "path";
-import { parseHeader, ParsedHeader, ParsedFunction } from "./parser-index.js";
-
-// ============================================================================
-// Type Definitions
-// ============================================================================
+import { parseHeader, ParsedHeader } from "./parser-index.js";
 
 interface TraceConfig {
   processIdentifier: string;
@@ -36,16 +30,10 @@ interface TraceEntry {
   error?: string;
 }
 
-// ============================================================================
-// Constants
-// ============================================================================
-
 const TRACE_BUFFER: TraceEntry[] = [];
 const MAX_BUFFER_SIZE = 10000;
 
-// ============================================================================
 // Main Entry Point
-// ============================================================================
 
 async function main(): Promise<void> {
   if (process.argv.length < 4) {
@@ -81,9 +69,7 @@ async function main(): Promise<void> {
   }
 }
 
-// ============================================================================
 // Core Tracing Functions
-// ============================================================================
 
 /**
  * Start tracing a process based on parsed headers
@@ -176,9 +162,7 @@ async function traceProcess(config: TraceConfig): Promise<void> {
   }
 }
 
-// ============================================================================
 // Frida Script Generation
-// ============================================================================
 
 /**
  * Generate a Frida script to trace the parsed functions
@@ -234,9 +218,7 @@ functionNames.forEach(name => {
 `;
 }
 
-// ============================================================================
 // Message Handling
-// ============================================================================
 
 /**
  * Handle messages from Frida script
@@ -288,9 +270,7 @@ function handleLog(level: frida.LogLevel, message: string): void {
   console.log(`${levelStr} ${message}`);
 }
 
-// ============================================================================
 // Utilities
-// ============================================================================
 
 /**
  * Extract option value from arguments
