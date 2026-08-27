@@ -3,13 +3,13 @@ parser-libclang.ts - Header parser (accurate)
 parser-index.ts - Shared module
 tracer.ts - 🆕 Function call tracer
 # 3. Parse a header
-npx ts-node parser-index.ts ./myheader.h
+npx tsx parser-index.ts ./myheader.h
 
 # 4. Trace function calls
-npx ts-node tracer.ts chrome ./api.h
-npx ts-node tracer.ts safari ./WebKit.h
-npx ts-node tracer.ts $MY_PID ./myapp.h
-npx ts-node tracer.ts chrome ./WebKit.h --output trace.json
+npx tsx tracer.ts chrome ./api.h
+npx tsx tracer.ts safari ./WebKit.h
+npx tsx tracer.ts $MY_PID ./myapp.h
+npx tsx tracer.ts chrome ./WebKit.h --output trace.json
 xcode-select --install
 sudo apt-get install build-essential python3
 
@@ -48,7 +48,7 @@ Example Workflow
 
 bash
 
-   ts-node parser-index.ts ./libcrypto.h > crypto_functions.json
+   tsx parser-index.ts ./libcrypto.h > crypto_functions.json
 
     Find function names to trace
 
@@ -60,7 +60,7 @@ bash
 
 bash
 
-   ts-node tracer.ts openssl ./libcrypto.h --output crypto_trace.json
+   tsx tracer.ts openssl ./libcrypto.h --output crypto_trace.json
 
     Analyze results
 

@@ -18,3 +18,5 @@ elif old in src:
     print(f"patched: {path}")
 else:
     raise SystemExit(f"target line not found in {path} — frida-tools version changed?")
+
+# -n accepts shell-style wildcards (fnmatch, not regex)

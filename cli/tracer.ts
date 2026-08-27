@@ -5,10 +5,10 @@
  * Traces function calls based on parsed C/C++ headers
  *
  * Usage:
- * npx ts-node tracer.ts <process_name_or_pid> <header_file>
+ * npx tsx tracer.ts <process_name_or_pid> <header_file>
  *
  * Example:
- * npx ts-node tracer.ts safari ./WebKit.h
+ * npx tsx tracer.ts safari ./WebKit.h
  */
 
 import * as frida from "frida";
@@ -53,9 +53,9 @@ async function main(): Promise<void> {
       `Usage: ${path.basename(process.argv[1])} <process_name_or_pid> <header_file>`,
     );
     console.error("\nExamples:");
-    console.error("  ts-node tracer.ts safari ./WebKit.h");
-    console.error("  ts-node tracer.ts 1234 ./api.h");
-    console.error('  ts-node tracer.ts "Google Chrome" ./chrome.h');
+    console.error("  tsx tracer.ts safari ./WebKit.h");
+    console.error("  tsx tracer.ts 1234 ./api.h");
+    console.error('  tsx tracer.ts "Google Chrome" ./chrome.h');
     process.exit(1);
   }
 
