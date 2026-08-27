@@ -3,18 +3,18 @@
 /**
  * Dynamic Function Tracer using Frida
  * Traces function calls based on parsed C/C++ headers
- * 
+ *
  * Usage:
  * npx ts-node tracer.ts <process_name_or_pid> <header_file>
- * 
+ *
  * Example:
  * npx ts-node tracer.ts safari ./WebKit.h
  */
 
-import * as frida from 'frida';
-import * as fs from 'fs';
-import * as path from 'path';
-import { parseHeader, ParsedHeader, ParsedFunction } from './parser-index.js';
+import * as frida from "frida";
+import * as fs from "fs";
+import * as path from "path";
+import { parseHeader, ParsedHeader, ParsedFunction } from "./parser-index.js";
 
 // ============================================================================
 // Type Definitions
@@ -29,7 +29,7 @@ interface TraceConfig {
 
 interface TraceEntry {
   timestamp: number;
-  type: 'call' | 'return' | 'error';
+  type: "call" | "return" | "error";
   functionName: string;
   arguments?: Record<string, unknown>;
   returnValue?: unknown;
@@ -50,11 +50,11 @@ const MAX_BUFFER_SIZE = 10000;
 async function main(): Promise<void> {
   if (process.argv.length < 4) {
     console.error(
-      `Usage: ${path.basename(process.argv[1])} <process_name_or_pid> <header_file>`
+      `Usage: ${path.basename(process.argv[1])} <process_name_or_pid> <header_file>`,
     );
-    console.error('\nExamples:');
-    console.error('  ts-node tracer.ts safari ./WebKit.h');
-    console.error('  ts-node tracer.ts 1234 ./api.h');
+    console.error("\nExamples:");
+    console.error("  ts-node tracer.ts safari ./WebKit.h");
+    console.error("  ts-node tracer.ts 1234 ./api.h");
     console.error('  ts-node tracer.ts "Google Chrome" ./chrome.h');
     process.exit(1);
   }
@@ -62,8 +62,8 @@ async function main(): Promise<void> {
   const config: TraceConfig = {
     processIdentifier: process.argv[2],
     headerPath: process.argv[3],
-    verbose: process.argv.includes('--verbose'),
-    outputFile: extractOption(process.argv, '--output')
+    verbose: process.argv.includes("--verbose"),
+    outputFile: extractOption(process.argv, "--output"),
   };
 
   // Validate header file
@@ -96,7 +96,7 @@ async function traceProcess(config: TraceConfig): Promise<void> {
   console.log(`   Found ${headerData.functions.length} functions`);
 
   if (headerData.functions.length === 0) {
-    console.warn('⚠️  No functions found in header file');
+    console.warn("⚠️  No functions found in header file");
     return;
   }
 
@@ -118,14 +118,15 @@ async function traceProcess(config: TraceConfig): Promise<void> {
       process = processes.find((p) => p.pid === processId) || null;
     } else {
       // It's a process name (with partial matching)
-      process = processes.find((p) =>
-        p.name.toLowerCase().includes(config.processIdentifier.toLowerCase())
-      ) || null;
+      process =
+        processes.find((p) =>
+          p.name.toLowerCase().includes(config.processIdentifier.toLowerCase()),
+        ) || null;
     }
 
     if (!process) {
       console.error(`Process not found: ${config.processIdentifier}`);
-      console.error('\nAvailable processes:');
+      console.error("\nAvailable processes:");
       processes.slice(0, 10).forEach((p) => {
         console.error(`  ${p.pid.toString().padEnd(6)} ${p.name}`);
       });
@@ -146,30 +147,28 @@ async function traceProcess(config: TraceConfig): Promise<void> {
 
   try {
     // Create tracer script
-    const script = await session.createScript(
-      generateTracerScript(headerData)
-    );
+    const script = await session.createScript(generateTracerScript(headerData));
 
     script.logHandler = handleLog;
     script.message.connect(handleMessage);
 
     await script.load();
     console.log(`🚀 Tracer started\n`);
-    console.log('📊 Function Calls:');
-    console.log('━'.repeat(80));
+    console.log("📊 Function Calls:");
+    console.log("━".repeat(80));
 
     // Keep running until interrupted
     await new Promise<void>((resolve) => {
-      process.on('SIGINT', () => {
-        console.log('\n\n📊 Trace Summary');
-        console.log('━'.repeat(80));
+      process.on("SIGINT", () => {
+        console.log("\n\n📊 Trace Summary");
+        console.log("━".repeat(80));
         printTraceSummary(TRACE_BUFFER);
         resolve();
       });
     });
   } finally {
     await session.detach();
-    console.log('✅ Detached from process');
+    console.log("✅ Detached from process");
 
     if (config.outputFile) {
       saveTraceToFile(TRACE_BUFFER, config.outputFile);
@@ -189,7 +188,7 @@ async function traceProcess(config: TraceConfig): Promise<void> {
 function generateTracerScript(headerData: ParsedHeader): string {
   const functionNames = headerData.functions
     .map((f) => `'${f.name}'`)
-    .join(', ');
+    .join(", ");
 
   return `
 // Automatically generated Frida tracing script
@@ -245,21 +244,23 @@ functionNames.forEach(name => {
  * @param data Associated data
  */
 function handleMessage(message: frida.MessageType, data: Buffer | null): void {
-  if (message.type === 'send') {
+  if (message.type === "send") {
     const payload = message.payload as Record<string, unknown>;
 
     const entry: TraceEntry = {
       timestamp: (payload.timestamp as number) || Date.now(),
-      type: (payload.type as 'call' | 'return') || 'call',
-      functionName: (payload.function as string) || 'unknown'
+      type: (payload.type as "call" | "return") || "call",
+      functionName: (payload.function as string) || "unknown",
     };
 
-    if (payload.type === 'call') {
+    if (payload.type === "call") {
       console.log(
-        `  → ${entry.functionName.padEnd(40)} [${new Date(entry.timestamp).toISOString()}]`
+        `  → ${entry.functionName.padEnd(40)} [${new Date(entry.timestamp).toISOString()}]`,
       );
-    } else if (payload.type === 'return') {
-      console.log(`  ← ${entry.functionName.padEnd(40)} (retval: ${payload.retval})`);
+    } else if (payload.type === "return") {
+      console.log(
+        `  ← ${entry.functionName.padEnd(40)} (retval: ${payload.retval})`,
+      );
     }
 
     TRACE_BUFFER.push(entry);
@@ -276,12 +277,13 @@ function handleMessage(message: frida.MessageType, data: Buffer | null): void {
  * @param message Log message
  */
 function handleLog(level: frida.LogLevel, message: string): void {
-  const levelStr = {
-    0: '[D]',
-    1: '[I]',
-    2: '[W]',
-    3: '[E]'
-  }[level] || '[?]';
+  const levelStr =
+    {
+      0: "[D]",
+      1: "[I]",
+      2: "[W]",
+      3: "[E]",
+    }[level] || "[?]";
 
   console.log(`${levelStr} ${message}`);
 }
@@ -314,7 +316,7 @@ function printTraceSummary(traces: TraceEntry[]): void {
     }
 
     const stats = functionStats.get(trace.functionName)!;
-    if (trace.type === 'call') {
+    if (trace.type === "call") {
       stats.calls++;
     } else {
       stats.returns++;
@@ -323,23 +325,23 @@ function printTraceSummary(traces: TraceEntry[]): void {
 
   // Sort by call count
   const sorted = Array.from(functionStats.entries()).sort(
-    (a, b) => b[1].calls - a[1].calls
+    (a, b) => b[1].calls - a[1].calls,
   );
 
-  console.log('\nFunction Call Statistics:');
-  console.log('━'.repeat(60));
-  console.log('Function Name'.padEnd(40) + ' Calls'.padEnd(10) + 'Returns');
-  console.log('━'.repeat(60));
+  console.log("\nFunction Call Statistics:");
+  console.log("━".repeat(60));
+  console.log("Function Name".padEnd(40) + " Calls".padEnd(10) + "Returns");
+  console.log("━".repeat(60));
 
   for (const [name, stats] of sorted) {
     console.log(
       name.padEnd(40) +
         stats.calls.toString().padEnd(10) +
-        stats.returns.toString()
+        stats.returns.toString(),
     );
   }
 
-  console.log('━'.repeat(60));
+  console.log("━".repeat(60));
   console.log(`Total traces captured: ${traces.length}`);
 }
 
@@ -355,6 +357,6 @@ function saveTraceToFile(traces: TraceEntry[], filepath: string): void {
 
 // Run main
 main().catch((error) => {
-  console.error('Fatal error:', error);
+  console.error("Fatal error:", error);
   process.exit(1);
 });

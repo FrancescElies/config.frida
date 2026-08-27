@@ -8,6 +8,10 @@ npx ts-node parser-index.ts ./myheader.h
 # 4. Trace function calls
 npx ts-node tracer.ts chrome ./api.h
 npx ts-node tracer.ts safari ./WebKit.h
+npx ts-node tracer.ts $MY_PID ./myapp.h
+npx ts-node tracer.ts chrome ./WebKit.h --output trace.json
+xcode-select --install
+sudo apt-get install build-essential python3
 
 tsconfig
 {
@@ -37,3 +41,29 @@ tsconfig
     "dist"
   ]
 }
+
+Example Workflow
+
+    Parse headers
+
+bash
+
+   ts-node parser-index.ts ./libcrypto.h > crypto_functions.json
+
+    Find function names to trace
+
+bash
+
+   grep "name" crypto_functions.json | head -10
+
+    Start tracing
+
+bash
+
+   ts-node tracer.ts openssl ./libcrypto.h --output crypto_trace.json
+
+    Analyze results
+
+bash
+
+   cat crypto_trace.json | jq '.[] | select(.type == "return")'
